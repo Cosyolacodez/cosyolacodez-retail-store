@@ -89,17 +89,18 @@ jobs:
     - name: Handle Existing Resources
       working-directory: terraform/eks/minimal
       run: |
-        echo "Checking for existing resources..."
+        echo "Importing existing resources..."
         
-        # Import existing IAM roles
-        terraform import module.retail_app_eks.module.iam_assumable_role_adot_amp.aws_iam_role.this[0] retail-store-adot-col-xray 2>/dev/null || echo "ADOT XRay role not found or already imported"
-        terraform import module.retail_app_eks.module.iam_assumable_role_adot_logs.aws_iam_role.this[0] retail-store-adot-col-logs 2>/dev/null || echo "ADOT Logs role not found or already imported"
+        # Check if resources exist in state, if not try to import
+        if ! terraform state show 'module.retail_app_eks.module.eks_cluster.module.kms.aws_kms_alias.this["cluster"]' >/dev/null 2>&1; then
+          terraform import 'module.retail_app_eks.module.eks_cluster.module.kms.aws_kms_alias.this["cluster"]' alias/eks/retail-store 2>/dev/null || echo "KMS alias import failed or not found"
+        fi
         
-        # Import other existing resources
-        terraform import module.retail_app_eks.module.eks_cluster.module.kms.aws_kms_alias.this[\"cluster\"] alias/eks/retail-store 2>/dev/null || echo "KMS alias not found or already imported"
-        terraform import module.retail_app_eks.module.eks_cluster.aws_cloudwatch_log_group.this[0] /aws/eks/retail-store/cluster 2>/dev/null || echo "Log group not found or already imported"
+        if ! terraform state show 'module.retail_app_eks.module.eks_cluster.aws_cloudwatch_log_group.this[0]' >/dev/null 2>&1; then
+          terraform import 'module.retail_app_eks.module.eks_cluster.aws_cloudwatch_log_group.this[0]' /aws/eks/retail-store/cluster 2>/dev/null || echo "Log group import failed or not found"
+        fi
         
-        echo "Resource check completed"
+        echo "Import completed"
 
     - name: Clean up AWS Load Balancer Controller
       run: |
