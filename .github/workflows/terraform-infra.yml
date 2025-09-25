@@ -90,19 +90,38 @@ jobs:
       run: |
         echo "Cleaning up existing resources..."
         
-        # Delete unused VPCs to avoid limit
-        aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].[VpcId,Tags[?Key==`Name`].Value|[0]]' --output text | while read vpc_id name; do
-          if [ "$name" != "retail-store-vpc" ]; then
-            echo "Deleting VPC: $vpc_id ($name)"
-            aws ec2 delete-vpc --vpc-id $vpc_id 2>/dev/null || echo "Failed to delete VPC $vpc_id"
-          fi
-        done
-        
         # Delete existing KMS alias if it exists
         aws kms delete-alias --alias-name alias/eks/retail-store 2>/dev/null || echo "KMS alias not found or already deleted"
         
         # Delete existing log group
         aws logs delete-log-group --log-group-name /aws/eks/retail-store/cluster 2>/dev/null || echo "Log group not found or already deleted"
+        
+        # Clean up VPCs with dependencies
+        for vpc_id in $(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' --output text); do
+          vpc_name=$(aws ec2 describe-vpcs --vpc-ids $vpc_id --query 'Vpcs[0].Tags[?Key==`Name`].Value' --output text 2>/dev/null || echo "")
+          if [ "$vpc_name" != "retail-store-vpc" ] && [ -n "$vpc_id" ]; then
+            echo "Cleaning up VPC: $vpc_id ($vpc_name)"
+            
+            # Delete NAT gateways
+            aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$vpc_id" --query 'NatGateways[].NatGatewayId' --output text | xargs -r -n1 aws ec2 delete-nat-gateway --nat-gateway-id 2>/dev/null || true
+            
+            # Delete internet gateways
+            aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query 'InternetGateways[].InternetGatewayId' --output text | xargs -r -n1 -I {} sh -c 'aws ec2 detach-internet-gateway --internet-gateway-id {} --vpc-id '$vpc_id' && aws ec2 delete-internet-gateway --internet-gateway-id {}' 2>/dev/null || true
+            
+            # Delete subnets
+            aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[].SubnetId' --output text | xargs -r -n1 aws ec2 delete-subnet --subnet-id 2>/dev/null || true
+            
+            # Delete route tables (except main)
+            aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[?Associations[0].Main!=`true`].RouteTableId' --output text | xargs -r -n1 aws ec2 delete-route-table --route-table-id 2>/dev/null || true
+            
+            # Delete security groups (except default)
+            aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text | xargs -r -n1 aws ec2 delete-security-group --group-id 2>/dev/null || true
+            
+            # Finally delete VPC
+            sleep 10
+            aws ec2 delete-vpc --vpc-id $vpc_id 2>/dev/null || echo "Failed to delete VPC $vpc_id"
+          fi
+        done
         
         echo "Cleanup completed"
 
