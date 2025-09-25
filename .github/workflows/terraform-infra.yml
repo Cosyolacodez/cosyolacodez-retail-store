@@ -96,10 +96,18 @@ jobs:
         terraform import module.retail_app_eks.module.iam_assumable_role_adot_logs.aws_iam_role.this[0] retail-store-adot-col-logs 2>/dev/null || echo "ADOT Logs role not found or already imported"
         
         # Import other existing resources
-        terraform import aws_kms_alias.eks_cluster alias/eks/retail-store 2>/dev/null || echo "KMS alias not found or already imported"
-        terraform import aws_cloudwatch_log_group.eks_cluster /aws/eks/retail-store/cluster 2>/dev/null || echo "Log group not found or already imported"
+        terraform import module.retail_app_eks.module.eks_cluster.module.kms.aws_kms_alias.this[\"cluster\"] alias/eks/retail-store 2>/dev/null || echo "KMS alias not found or already imported"
+        terraform import module.retail_app_eks.module.eks_cluster.aws_cloudwatch_log_group.this[0] /aws/eks/retail-store/cluster 2>/dev/null || echo "Log group not found or already imported"
         
         echo "Resource check completed"
+
+    - name: Clean up AWS Load Balancer Controller
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name retail-store || echo "Cluster not found"
+        kubectl delete validatingwebhookconfiguration aws-load-balancer-webhook --ignore-not-found=true
+        kubectl delete mutatingwebhookconfiguration aws-load-balancer-webhook --ignore-not-found=true
+        kubectl delete deployment aws-load-balancer-controller -n kube-system --ignore-not-found=true
+        kubectl delete service aws-load-balancer-webhook-service -n kube-system --ignore-not-found=true
 
     - name: Terraform Apply
       working-directory: terraform/eks/minimal
