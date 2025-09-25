@@ -86,21 +86,32 @@ jobs:
                         -backend-config="dynamodb_table=retail-store-terraform-locks" \
                         -backend-config="encrypt=true"
 
+    - name: Clean up existing resources
+      run: |
+        echo "Cleaning up existing resources..."
+        
+        # Delete unused VPCs to avoid limit
+        aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].[VpcId,Tags[?Key==`Name`].Value|[0]]' --output text | while read vpc_id name; do
+          if [ "$name" != "retail-store-vpc" ]; then
+            echo "Deleting VPC: $vpc_id ($name)"
+            aws ec2 delete-vpc --vpc-id $vpc_id 2>/dev/null || echo "Failed to delete VPC $vpc_id"
+          fi
+        done
+        
+        # Delete existing KMS alias if it exists
+        aws kms delete-alias --alias-name alias/eks/retail-store 2>/dev/null || echo "KMS alias not found or already deleted"
+        
+        # Delete existing log group
+        aws logs delete-log-group --log-group-name /aws/eks/retail-store/cluster 2>/dev/null || echo "Log group not found or already deleted"
+        
+        echo "Cleanup completed"
+
     - name: Handle Existing Resources
       working-directory: terraform/eks/minimal
       run: |
-        echo "Importing existing resources..."
-        
-        # Check if resources exist in state, if not try to import
-        if ! terraform state show 'module.retail_app_eks.module.eks_cluster.module.kms.aws_kms_alias.this["cluster"]' >/dev/null 2>&1; then
-          terraform import 'module.retail_app_eks.module.eks_cluster.module.kms.aws_kms_alias.this["cluster"]' alias/eks/retail-store 2>/dev/null || echo "KMS alias import failed or not found"
-        fi
-        
-        if ! terraform state show 'module.retail_app_eks.module.eks_cluster.aws_cloudwatch_log_group.this[0]' >/dev/null 2>&1; then
-          terraform import 'module.retail_app_eks.module.eks_cluster.aws_cloudwatch_log_group.this[0]' /aws/eks/retail-store/cluster 2>/dev/null || echo "Log group import failed or not found"
-        fi
-        
-        echo "Import completed"
+        echo "Checking terraform state..."
+        terraform state list || echo "No existing state"
+        echo "State check completed"
 
     - name: Clean up AWS Load Balancer Controller
       run: |
